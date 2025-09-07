@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* App-wide tweaks */
+:root {
+  --brand: #7c3aed; /* violet-600 */
+}
+
+* { box-sizing: border-box; }
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(124, 58, 237, 0.3);
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: rgba(0,0,0,0.05);
+}
