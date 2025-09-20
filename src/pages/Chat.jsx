@@ -12,6 +12,8 @@ import {
 import {
   collection,
   addDoc,
+  getDoc,
+  doc,
   query as qf,
   orderBy,
   onSnapshot,
@@ -20,6 +22,7 @@ import {
 import { db } from "../firebase";
 import data from "../shared/mockData";
 import { useAuth } from "../context/AuthContext";
+import { useLocation } from "react-router-dom";
 
 function classNames(...c) {
   return c.filter(Boolean).join(" ");
@@ -39,13 +42,25 @@ export default function Chat() {
   );
 
   const [activeUid, setActiveUid] = useState(null);
+  const [selectedUserProfile, setSelectedUserProfile] = useState(null); // holds the profile for activeUid (from profiles or fetched)
   const [showSidebar, setShowSidebar] = useState(true); // mobile toggle
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState([]);
   const [queryText, setQueryText] = useState("");
   const endRef = useRef(null);
+  const location = useLocation();
 
-  // Load users
+  // 1) Read URL param ?u=<uid> and preselect
+  useEffect(() => {
+    const q = new URLSearchParams(location.search);
+    const uidParam = q.get("u");
+    if (uidParam) {
+      setActiveUid(uidParam);
+      setShowSidebar(false); // helpful on mobile so user sees chat directly
+    }
+  }, [location.search]);
+
+  // 2) Load all users (sidebar)
   useEffect(() => {
     const q = qf(collection(db, "users"), orderBy("displayName", "asc"));
     const unsub = onSnapshot(
@@ -54,7 +69,7 @@ export default function Chat() {
         const arr = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
         if (arr.length > 0) {
           setProfiles(arr);
-          // auto-select first other user
+          // auto-select the first other user only if no activeUid set (URL param wins)
           if (!activeUid) {
             const firstOther = arr.find((u) => u.uid !== user?.uid);
             setActiveUid(firstOther?.uid || null);
@@ -64,22 +79,62 @@ export default function Chat() {
       (err) => console.error("users snapshot error:", err)
     );
     return () => unsub();
-  }, [user, activeUid]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]); // note: do not include activeUid here so URL param set earlier isn't overwritten
 
-  // Active profile (the person I'm chatting with)
+  // 3) Ensure we have a profile object for activeUid even if sidebar hasn't arrived yet
+  useEffect(() => {
+    if (!activeUid) {
+      setSelectedUserProfile(null);
+      return;
+    }
+
+    // if user is already in profiles, use that
+    const existing = profiles.find((p) => p.uid === activeUid);
+    if (existing) {
+      setSelectedUserProfile(existing);
+      return;
+    }
+
+    // otherwise fetch single user doc from Firestore
+    let mounted = true;
+    getDoc(doc(db, "users", activeUid))
+      .then((snap) => {
+        if (!mounted) return;
+        if (snap.exists()) {
+          setSelectedUserProfile({ uid: snap.id, ...snap.data() });
+        } else {
+          // If not found in Firestore either, set minimal placeholder so UI doesn't break
+          setSelectedUserProfile({ uid: activeUid, displayName: "Unknown user" });
+        }
+      })
+      .catch((err) => {
+        console.error("fetch selected user error:", err);
+        if (mounted) setSelectedUserProfile({ uid: activeUid, displayName: "Unknown user" });
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [activeUid, profiles]);
+
+  // 4) Active profile used in UI (from fetched selectedUserProfile or the profiles array)
   const activeProfile = useMemo(
-    () => profiles.find((p) => p.uid === activeUid) || null,
-    [profiles, activeUid]
+    () =>
+      selectedUserProfile ||
+      profiles.find((p) => p.uid === activeUid) ||
+      null,
+    [selectedUserProfile, profiles, activeUid]
   );
 
-  // Unique conversation id (always between 2 users)
+  // 5) Compute conversationId using activeUid directly (so messages can load even if profile object not yet present)
   const conversationId = useMemo(() => {
-    if (!user?.uid || !activeProfile?.uid) return null;
-    if (user.uid === activeProfile.uid) return null; // ❌ block self chat
-    return [user.uid, activeProfile.uid].sort().join("_");
-  }, [user, activeProfile]);
+    if (!user?.uid || !activeUid) return null;
+    if (user.uid === activeUid) return null; // block self chat
+    return [user.uid, activeUid].sort().join("_");
+  }, [user, activeUid]);
 
-  // Messages listener
+  // 6) Messages listener for the conversation
   useEffect(() => {
     if (!conversationId) {
       setMessages([]);
@@ -106,7 +161,7 @@ export default function Chat() {
     return () => unsub();
   }, [conversationId]);
 
-  // Auto-scroll
+  // 7) Auto-scroll when messages change
   useEffect(() => {
     if (endRef.current) {
       endRef.current.scrollIntoView({ behavior: "smooth" });
@@ -118,7 +173,7 @@ export default function Chat() {
     const q = queryText.trim().toLowerCase();
     return profiles.filter(
       (p) =>
-        p.uid !== user?.uid && // ✅ exclude myself
+        p.uid !== user?.uid && // exclude myself
         ((p.displayName || "").toLowerCase().includes(q) ||
           (p.role || "").toLowerCase().includes(q) ||
           (p.sector || "").toLowerCase().includes(q) ||
@@ -154,193 +209,193 @@ export default function Chat() {
     }
   };
 
-return (
-  <div className="h-[calc(100vh-64px)]">
-    <div className="mx-auto max-w-7xl h-full">
-      <div className="grid grid-cols-12 h-full border border-violet-100 rounded-2xl overflow-hidden shadow-soft bg-white">
+  return (
+    <div className="h-[calc(100vh-64px)]">
+      <div className="mx-auto max-w-7xl h-full">
+        <div className="grid grid-cols-12 h-full border border-violet-100 rounded-2xl overflow-hidden shadow-soft bg-white">
 
-        {/* Sidebar (scrolls independently) */}
-        <aside
-          className={classNames(
-            "border-r border-violet-100 bg-white flex flex-col min-h-0", // ✅ min-h-0 ensures scrolling works
-            "sm:col-span-4 lg:col-span-3",
-            showSidebar ? "col-span-12 sm:col-span-4" : "hidden sm:flex"
-          )}
-        >
-          <div className="p-3 border-b border-violet-100 flex-shrink-0">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2" size={18} />
-              <input
-                value={queryText}
-                onChange={(e) => setQueryText(e.target.value)}
-                placeholder="Search people, sectors..."
-                className="w-full pl-10 pr-3 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-violet-400"
-              />
+          {/* Sidebar (scrolls independently) */}
+          <aside
+            className={classNames(
+              "border-r border-violet-100 bg-white flex flex-col min-h-0",
+              "sm:col-span-4 lg:col-span-3",
+              showSidebar ? "col-span-12 sm:col-span-4" : "hidden sm:flex"
+            )}
+          >
+            <div className="p-3 border-b border-violet-100 flex-shrink-0">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2" size={18} />
+                <input
+                  value={queryText}
+                  onChange={(e) => setQueryText(e.target.value)}
+                  placeholder="Search people, sectors..."
+                  className="w-full pl-10 pr-3 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-violet-400"
+                />
+              </div>
             </div>
-          </div>
 
-          {/* ✅ Sidebar scrollable */}
-          <div className="flex-1 overflow-y-auto">
-            {filtered.map((p) => (
-              <button
-                key={p.uid}
-                onClick={() => handleSelectProfile(p.uid)}
-                className={classNames(
-                  "w-full text-left px-3 py-3 border-b border-gray-50 hover:bg-violet-50/60 transition",
-                  activeUid === p.uid ? "bg-violet-50" : ""
-                )}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="relative">
-                    {p.photoURL ? (
+            <div className="flex-1 overflow-y-auto">
+              {filtered.map((p) => (
+                <button
+                  key={p.uid}
+                  onClick={() => handleSelectProfile(p.uid)}
+                  className={classNames(
+                    "w-full text-left px-3 py-3 border-b border-gray-50 hover:bg-violet-50/60 transition",
+                    activeUid === p.uid ? "bg-violet-50" : ""
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="relative">
+                      {p.photoURL ? (
+                        <img
+                          src={p.photoURL}
+                          alt={p.displayName}
+                          className="h-9 w-9 rounded-xl object-cover"
+                        />
+                      ) : (
+                        <div className="h-9 w-9 rounded-xl bg-violet-600 text-white grid place-items-center text-sm font-bold">
+                          {(p.displayName || "U")
+                            .split(" ")
+                            .map((n) => n[0])
+                            .join("")
+                            .slice(0, 2)}
+                        </div>
+                      )}
+                      <span className="absolute -right-0 -bottom-0">
+                        <Circle
+                          size={12}
+                          className="text-emerald-500 fill-emerald-500 rounded-full"
+                        />
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-gray-900 truncate">
+                        {p.displayName}
+                      </p>
+                      <p className="text-xs text-gray-500 truncate">
+                        {p.role} • {p.sector}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          {/* Chat area (scrolls independently) */}
+          <section
+            className={classNames(
+              "flex flex-col h-full min-h-0",
+              "sm:col-span-8 lg:col-span-9",
+              showSidebar ? "hidden sm:flex" : "col-span-12 sm:col-span-8"
+            )}
+          >
+            {/* Header */}
+            <div className="h-14 px-3 sm:px-4 border-b border-violet-100 flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <button
+                  className="sm:hidden p-2 rounded-md hover:bg-violet-50"
+                  onClick={() => setShowSidebar(true)}
+                >
+                  <ArrowLeft size={18} />
+                </button>
+
+                {activeProfile && (
+                  <div className="h-9 w-9 rounded-xl bg-violet-600 text-white grid place-items-center text-sm font-bold overflow-hidden">
+                    {activeProfile.photoURL ? (
                       <img
-                        src={p.photoURL}
-                        alt={p.displayName}
-                        className="h-9 w-9 rounded-xl object-cover"
+                        src={activeProfile.photoURL}
+                        alt={activeProfile.displayName}
+                        className="h-full w-full object-cover"
                       />
                     ) : (
-                      <div className="h-9 w-9 rounded-xl bg-violet-600 text-white grid place-items-center text-sm font-bold">
-                        {(p.displayName || "U")
-                          .split(" ")
-                          .map((n) => n[0])
-                          .join("")
-                          .slice(0, 2)}
-                      </div>
+                      (activeProfile.displayName || "U")
+                        .split(" ")
+                        .map((n) => n[0])
+                        .join("")
+                        .slice(0, 2)
                     )}
-                    <span className="absolute -right-0 -bottom-0">
-                      <Circle
-                        size={12}
-                        className="text-emerald-500 fill-emerald-500 rounded-full"
-                      />
-                    </span>
                   </div>
-                  <div className="min-w-0">
-                    <p className="font-semibold text-gray-900 truncate">
-                      {p.displayName}
-                    </p>
-                    <p className="text-xs text-gray-500 truncate">
-                      {p.role} • {p.sector}
-                    </p>
-                  </div>
+                )}
+                <div>
+                  <p className="font-semibold text-gray-900">
+                    {activeProfile?.displayName || "Select a person"}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {activeProfile?.role} • {activeProfile?.sector}
+                  </p>
                 </div>
-              </button>
-            ))}
-          </div>
-        </aside>
-
-        {/* Chat area (scrolls independently) */}
-        <section
-          className={classNames(
-            "flex flex-col h-full min-h-0", // ✅ min-h-0 fixes overflow
-            "sm:col-span-8 lg:col-span-9",
-            showSidebar ? "hidden sm:flex" : "col-span-12 sm:col-span-8"
-          )}
-        >
-          {/* Header */}
-          <div className="h-14 px-3 sm:px-4 border-b border-violet-100 flex items-center justify-between flex-shrink-0">
-            <div className="flex items-center gap-3">
-              <button
-                className="sm:hidden p-2 rounded-md hover:bg-violet-50"
-                onClick={() => setShowSidebar(true)}
-              >
-                <ArrowLeft size={18} />
-              </button>
-
-              {activeProfile && (
-                <div className="h-9 w-9 rounded-xl bg-violet-600 text-white grid place-items-center text-sm font-bold overflow-hidden">
-                  {activeProfile.photoURL ? (
-                    <img
-                      src={activeProfile.photoURL}
-                      alt={activeProfile.displayName}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    (activeProfile.displayName || "U")
-                      .split(" ")
-                      .map((n) => n[0])
-                      .join("")
-                      .slice(0, 2)
-                  )}
-                </div>
-              )}
-              <div>
-                <p className="font-semibold text-gray-900">
-                  {activeProfile?.displayName || "Select a person"}
-                </p>
-                <p className="text-xs text-gray-500">
-                  {activeProfile?.role} • {activeProfile?.sector}
-                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button className="p-2 rounded-xl hover:bg-violet-50"><Phone size={18} /></button>
+                <button className="p-2 rounded-xl hover:bg-violet-50"><Video size={18} /></button>
+                <button className="p-2 rounded-xl hover:bg-violet-50"><MoreHorizontal size={18} /></button>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <button className="p-2 rounded-xl hover:bg-violet-50"><Phone size={18} /></button>
-              <button className="p-2 rounded-xl hover:bg-violet-50"><Video size={18} /></button>
-              <button className="p-2 rounded-xl hover:bg-violet-50"><MoreHorizontal size={18} /></button>
-            </div>
-          </div>
 
-          {/* ✅ Messages scrollable */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gradient-to-b from-white to-violet-50 min-h-0">
-            {messages.map((m) => {
-              const isSelf = m.senderId === user?.uid;
-              return (
-                <div
-                  key={m.id}
-                  className={classNames("flex", isSelf ? "justify-end" : "justify-start")}
-                >
+            {/* Messages scrollable */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gradient-to-b from-white to-violet-50 min-h-0">
+              {messages.map((m) => {
+                const isSelf = m.senderId === user?.uid;
+                return (
                   <div
-                    className={classNames(
-                      "max-w-[75%] px-4 py-2 rounded-2xl text-sm shadow break-words",
-                      isSelf
-                        ? "bg-violet-600 text-white rounded-br-sm"
-                        : "bg-gray-100 text-gray-800 rounded-bl-sm"
-                    )}
+                    key={m.id}
+                    className={classNames("flex", isSelf ? "justify-end" : "justify-start")}
                   >
-                    <p>{m.text}</p>
-                    {m.createdAt?.seconds && (
-                      <span className="block text-[10px] mt-1 opacity-70 text-right">
-                        {new Date(m.createdAt.seconds * 1000).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </span>
-                    )}
+                    <div
+                      className={classNames(
+                        "max-w-[75%] px-4 py-2 rounded-2xl text-sm shadow break-words",
+                        isSelf
+                          ? "bg-violet-600 text-white rounded-br-sm"
+                          : "bg-gray-100 text-gray-800 rounded-bl-sm"
+                      )}
+                    >
+                      <p>{m.text}</p>
+                      {m.createdAt?.seconds && (
+                        <span className="block text-[10px] mt-1 opacity-70 text-right">
+                          {new Date(m.createdAt.seconds * 1000).toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-            <div ref={endRef} />
-          </div>
-
-          {/* Composer (fixed, not affected by scroll) */}
-          {activeProfile && (
-            <div className="border-t border-violet-100 p-3 bg-white flex-shrink-0">
-              <div className="flex items-end gap-2">
-                <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  rows={1}
-                  placeholder="Write a message..."
-                  className="flex-1 resize-none rounded-2xl border border-gray-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-400"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      handleSend();
-                    }
-                  }}
-                />
-                <button
-                  onClick={handleSend}
-                  className="h-10 px-4 rounded-2xl bg-violet-600 text-white font-semibold hover:bg-violet-700 inline-flex items-center gap-2"
-                >
-                  <Send size={16} /> Send
-                </button>
-              </div>
+                );
+              })}
+              <div ref={endRef} />
             </div>
-          )}
-        </section>
+
+            {/* Composer */}
+            {activeProfile && (
+              <div className="border-t border-violet-100 p-3 bg-white flex-shrink-0">
+                <div className="flex items-end gap-2">
+                  <textarea
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    rows={1}
+                    placeholder="Write a message..."
+                    className="flex-1 resize-none rounded-2xl border border-gray-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-400"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSend();
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={handleSend}
+                    className="h-10 px-4 rounded-2xl bg-violet-600 text-white font-semibold hover:bg-violet-700 inline-flex items-center gap-2"
+                  >
+                    <Send size={16} /> Send
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
 }
+  
