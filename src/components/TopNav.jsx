@@ -29,23 +29,26 @@ export default function TopNav() {
         <div className="flex h-16 items-center justify-between">
           {/* Brand */}
           <Link to="/" className="flex items-center gap-2">
-            <img
-              src={logo}
-              alt="Zetiify Logo"
-              className="h-9 w-9 object-contain shadow-md" // ✅ box logo (no rounded)
-            />
-            <span className="text-lg sm:text-xl font-bold tracking-tight text-gray-900">
-              Zetiify
+           <div className="w-8 h-8 bg-purple-600 rounded-lg flex items-center justify-center">
+                <span className="text-white font-bold text-sm">Z</span>
+              </div>
+            <span className="text-lg sm:text-xl font-bold tracking-tight text-[#7C3AED]">
+              ZETIIFY
             </span>
           </Link>
 
           {/* Desktop Nav */}
           <nav className="hidden sm:flex items-center gap-1">
+
+
+
+
             <NavLink to="/dashboard" className={navLinkClass}>
               <span className="inline-flex items-center gap-2">
                 <LayoutDashboard size={16} /> Dashboard
               </span>
             </NavLink>
+            
             <NavLink to="/chat" className={navLinkClass}>
               <span className="inline-flex items-center gap-2">
                 <MessageSquare size={16} /> Messages
